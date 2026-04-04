@@ -1,0 +1,61 @@
+name: Deploy FastAPI Classifier to AWS
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build and Push Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        # Make sure you created this new ECR repo in AWS!
+        ECR_REPOSITORY: ai-vs-real-fastapi
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        
+    - name: Generate Dockerrun.aws.json
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ai-vs-real-fastapi
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        echo '{
+          "AWSEBDockerrunVersion": "1",
+          "Image": {
+            "Name": "'$ECR_REGISTRY'/'$ECR_REPOSITORY':'$IMAGE_TAG'",
+            "Update": "true"
+          },
+          "Ports": [ { "ContainerPort": "8000" } ] 
+        }' > Dockerrun.aws.json
+        # Notice we changed ContainerPort to 8000 to match your config.yml!
+
+    - name: Deploy to Elastic Beanstalk
+      uses: einaregilsson/beanstalk-deploy@v21
+      with:
+        aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        application_name: ai-image-detector-app
+        environment_name: ai-image-detector-env
+        version_label: ${{ github.sha }}
+        region: ${{ secrets.AWS_REGION }}
+        deployment_package: Dockerrun.aws.json
+        use_existing_version_if_available: true
